@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mx-auto p-6 bg-white rounded-lg shadow-xl">
+    <h1 class="text-4xl font-extrabold text-dark mb-8 text-center">Admin Dashboard Overview</h1>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <div class="mb-6">
+                {% for category, message in messages %}
+                    <div class="flash-message p-4 mb-3 rounded-lg {% if category == 'success' %}bg-green-100 text-green-700{% elif category == 'danger' %}bg-red-100 text-red-700{% elif category == 'info' %}bg-blue-100 text-blue-700{% endif %} shadow-md">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endwith %}
+
+    <p class="text-gray-700 text-lg mb-8 text-center">Welcome back, <span class="font-semibold text-primary">{{ admin_user }}</span>! Here's a quick summary of your blood bank's operations.</p>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 mb-10">
+        <!-- Total Donors Card -->
+        <div class="bg-blue-50 border-b-4 border-blue-500 rounded-xl shadow-lg p-6 flex items-center transform transition duration-300 hover:scale-105 hover:shadow-2xl">
+            <div class="flex-shrink-0 bg-blue-500 p-3 rounded-full text-white shadow-md">
+                <svg class="h-8 w-8" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                    <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd" />
+                </svg>
+            </div>
+            <div class="ml-5">
+                <p class="text-sm font-medium text-blue-800 uppercase">Total Donors</p>
+                <p class="text-4xl font-extrabold text-dark">{{ total_donors }}</p>
+            </div>
+        </div>
+
+        <!-- Total Patients Card -->
+        <div class="bg-green-50 border-b-4 border-green-500 rounded-xl shadow-lg p-6 flex items-center transform transition duration-300 hover:scale-105 hover:shadow-2xl">
+            <div class="flex-shrink-0 bg-green-500 p-3 rounded-full text-white shadow-md">
+                <svg class="h-8 w-8" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                    <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd" />
+                </svg>
+            </div>
+            <div class="ml-5">
+                <p class="text-sm font-medium text-green-800 uppercase">Total Patients</p>
+                <p class="text-4xl font-extrabold text-dark">{{ total_patients }}</p>
+            </div>
+        </div>
+
+        <!-- Pending Blood Requests Card -->
+        <div class="bg-yellow-50 border-b-4 border-yellow-500 rounded-xl shadow-lg p-6 flex items-center transform transition duration-300 hover:scale-105 hover:shadow-2xl">
+            <div class="flex-shrink-0 bg-yellow-500 p-3 rounded-full text-white shadow-md">
+                <svg class="h-8 w-8" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l3 3a1 1 0 001.414-1.414L11 9.586V6z" clip-rule="evenodd" />
+                </svg>
+            </div>
+            <div class="ml-5">
+                <p class="text-sm font-medium text-yellow-800 uppercase">Pending Requests</p>
+                <p class="text-4xl font-extrabold text-dark">{{ pending_requests }}</p>
+            </div>
+        </div>
+
+        <!-- Total Blood Units Card -->
+        <div class="bg-red-50 border-b-4 border-red-500 rounded-xl shadow-lg p-6 flex items-center transform transition duration-300 hover:scale-105 hover:shadow-2xl">
+            <div class="flex-shrink-0 bg-red-500 p-3 rounded-full text-white shadow-md">
+                <svg class="h-8 w-8" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                </svg>
+            </div>
+            <div class="ml-5">
+                <p class="text-sm font-medium text-red-800 uppercase">Total Blood Units</p>
+                <p class="text-4xl font-extrabold text-dark">{{ total_blood_units }} units</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="mt-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <a href="{{ url_for('patients') }}" class="block p-5 bg-gray-100 rounded-xl shadow-md hover:bg-gray-200 transition duration-300 text-center font-semibold text-lg text-gray-800 transform hover:scale-105">Manage Patients</a>
+        <a href="{{ url_for('donors') }}" class="block p-5 bg-gray-100 rounded-xl shadow-md hover:bg-gray-200 transition duration-300 text-center font-semibold text-lg text-gray-800 transform hover:scale-105">Manage Donors</a>
+        <a href="{{ url_for('blood_requests') }}" class="block p-5 bg-gray-100 rounded-xl shadow-md hover:bg-gray-200 transition duration-300 text-center font-semibold text-lg text-gray-800 transform hover:scale-105">Manage Blood Requests</a>
+        <a href="{{ url_for('inventory') }}" class="block p-5 bg-gray-100 rounded-xl shadow-md hover:bg-gray-200 transition duration-300 text-center font-semibold text-lg text-gray-800 transform hover:scale-105">Manage Inventory</a>
+        <a href="{{ url_for('admin_logout') }}" class="block p-5 bg-primary text-white rounded-xl shadow-md hover:bg-secondary transition duration-300 text-center font-semibold text-lg transform hover:scale-105">Logout</a>
+    </div>
+</div>
+{% endblock %}

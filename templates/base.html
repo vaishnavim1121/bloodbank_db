@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Blood Bank Management{% endblock %}</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        primary: '#ef4444', /* Tailwind red-500 */
+                        secondary: '#f87171', /* Tailwind red-400 */
+                        accent: '#22d3ee', /* Tailwind cyan-400 */
+                        dark: '#1f2937', /* Tailwind gray-800 */
+                        light: '#f9fafb', /* Tailwind gray-50 */
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Google Fonts - Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f3f4f6; /* Light gray background */
+            font-family: 'Inter', sans-serif;
+        }
+        .flash-message {
+            opacity: 1;
+            transition: opacity 0.5s ease-out;
+        }
+        .flash-message.hide {
+            opacity: 0;
+        }
+    </style>
+</head>
+<body class="flex flex-col min-h-screen">
+    <header class="bg-dark text-white p-4 shadow-lg">
+        <div class="container mx-auto flex justify-between items-center">
+            <a href="{{ url_for('home') }}" class="text-2xl font-bold flex items-center text-primary">
+                <svg class="w-8 h-8 mr-2" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                    <path fill-rule="evenodd" d="M9 2a1 1 0 00-1 1v2H5a2 2 0 00-2 2v5a2 2 0 002 2h3.586l1.293 1.293A1 1 0 0011 16.586V14h3a2 2 0 002-2V7a2 2 0 00-2-2h-3V3a1 1 0 00-1-1zm0 2h1v2h-1V4zm0 3h1v2h-1V7zm0 3h1v2h-1v-2z" clip-rule="evenodd" />
+                    <path fill-rule="evenodd" d="M12 7h-2v2h2V7zm0 3h-2v2h2v-2z" clip-rule="evenodd" />
+                </svg>
+                Blood Bank Admin
+            </a>
+            <nav>
+                <ul class="flex space-x-6 items-center">
+                    {% if session.admin_user %}
+                        <li><a href="{{ url_for('admin_dashboard') }}" class="text-white hover:text-accent font-medium transition duration-300">Dashboard</a></li>
+                        <li><a href="{{ url_for('patients') }}" class="text-white hover:text-accent font-medium transition duration-300">Patients</a></li>
+                        <li><a href="{{ url_for('donors') }}" class="text-white hover:text-accent font-medium transition duration-300">Donors</a></li>
+                        <li><a href="{{ url_for('blood_requests') }}" class="text-white hover:text-accent font-medium transition duration-300">Requests</a></li>
+                        <li><a href="{{ url_for('inventory') }}" class="text-white hover:text-accent font-medium transition duration-300">Inventory</a></li>
+                        <li>
+                            <span class="text-gray-300 text-sm italic mr-2">Welcome, {{ session.admin_user }}</span>
+                            <a href="{{ url_for('admin_logout') }}" class="px-4 py-2 bg-primary rounded-md hover:bg-secondary transition duration-300 font-medium">Logout</a>
+                        </li>
+                    {% else %}
+                        <li><a href="{{ url_for('check_availability') }}" class="text-white hover:text-accent font-medium transition duration-300">Check Availability</a></li>
+                        <li><a href="{{ url_for('admin_login') }}" class="px-4 py-2 bg-primary rounded-md hover:bg-secondary transition duration-300 font-medium">Admin Login</a></li>
+                    {% endif %}
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <main class="flex-grow container mx-auto px-4 py-8">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="bg-dark text-white p-4 text-center text-sm shadow-inner mt-auto">
+        <div class="container mx-auto">
+            &copy; {{ current_year }} Blood Bank Management System. All rights reserved.
+        </div>
+    </footer>
+
+    <script>
+        // JavaScript for fading out flash messages
+        document.addEventListener('DOMContentLoaded', function() {
+            const flashMessages = document.querySelectorAll('.flash-message');
+            flashMessages.forEach(message => {
+                setTimeout(() => {
+                    message.classList.add('hide');
+                    message.addEventListener('transitionend', () => {
+                        message.remove();
+                    });
+                }, 5000); // Hide after 5 seconds
+            });
+        });
+    </script>
+</body>
+</html>
