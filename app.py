@@ -1,7 +1,8 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, session
 from datetime import timedelta, datetime
-import mysql.connector
-from mysql.connector import Error
+# Import psycopg2 for PostgreSQL connection
+import psycopg2
+from psycopg2 import Error
 
 app = Flask(__name__)
 
@@ -11,16 +12,42 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=60) # Session lasts
 app.config['SESSION_REFRESH_EACH_REQUEST'] = True # Extends session on each request
 # --- END SESSION CONFIG ---
 
+# --- DATABASE CONFIGURATION ---
+# IMPORTANT: For deployment on Render, you MUST use environment variables for sensitive info.
+# Render will automatically inject DATABASE_URL if you create a PostgreSQL service.
+# For local testing, you can uncomment and set a direct connection string or environment variable.
+# For example, if you run locally with PostgreSQL:
+# DB_HOST = "localhost"
+# DB_NAME = "bloodbank_db"
+# DB_USER = "your_pg_user"
+# DB_PASSWORD = "your_pg_password"
+# DB_PORT = "5432" # Default PostgreSQL port
 
-# Database connection function
+# This will try to get the DATABASE_URL from Render's environment, or use a fallback for local testing
+import os
+DATABASE_URL = os.environ.get('DATABASE_URL') # Render automatically sets this for PostgreSQL services
+
 def get_db_connection():
-    """Establishes and returns a database connection."""
-    return mysql.connector.connect(
-        host='localhost',
-        user='root',
-        password='', # Consider fetching from environment variables for security
-        database='bloodbank_db'
-    )
+    """Establishes and returns a database connection using psycopg2 for PostgreSQL."""
+    conn = None
+    try:
+        if DATABASE_URL:
+            conn = psycopg2.connect(DATABASE_URL)
+        else:
+            # Fallback for local development if not using DATABASE_URL env var
+            # You'll need to set your local PostgreSQL credentials here
+            conn = psycopg2.connect(
+                host=os.environ.get('DB_HOST', 'localhost'),
+                database=os.environ.get('DB_NAME', 'bloodbank_db'),
+                user=os.environ.get('DB_USER', 'postgres'), # Default PostgreSQL user
+                password=os.environ.get('DB_PASSWORD', 'your_local_pg_password'), # CHANGE THIS FOR LOCAL DEV
+                port=os.environ.get('DB_PORT', '5432')
+            )
+        return conn
+    except Error as e:
+        print(f"Error connecting to PostgreSQL database: {e}")
+        # In a real app, you might want to log this error more robustly
+        return None
 
 # Helper function to get all blood groups (ID and Name) for dropdowns
 def get_all_blood_groups():
@@ -29,9 +56,10 @@ def get_all_blood_groups():
     blood_groups = []
     try:
         conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT id, group_name FROM blood_groups ORDER BY group_name ASC")
-        blood_groups = cursor.fetchall()
+        if conn:
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor) # Use DictCursor for dictionary-like access
+            cursor.execute("SELECT id, group_name FROM blood_groups ORDER BY group_name ASC")
+            blood_groups = cursor.fetchall()
     except Error as e:
         print(f"Error fetching blood groups: {e}") # Print to console, not flash
     finally:
@@ -41,18 +69,19 @@ def get_all_blood_groups():
             conn.close()
     return blood_groups
 
-# Helper function to get blood_group_id from group_name (useful if you only have the name in some legacy part)
+# Helper function to get blood_group_id from group_name
 def get_blood_group_id(group_name):
     conn = None
     cursor = None
     blood_group_id = None
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM blood_groups WHERE group_name = %s", (group_name,))
-        result = cursor.fetchone()
-        if result:
-            blood_group_id = result[0]
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM blood_groups WHERE group_name = %s", (group_name,))
+            result = cursor.fetchone()
+            if result:
+                blood_group_id = result[0]
     except Error as e:
         print(f"Error getting blood group ID for {group_name}: {e}")
     finally:
@@ -110,19 +139,20 @@ def admin_dashboard():
 
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT COUNT(*) FROM donors")
-        total_donors = cursor.fetchone()[0]
+        if conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT COUNT(*) FROM donors")
+            total_donors = cursor.fetchone()[0]
 
-        cursor.execute("SELECT COUNT(*) FROM patients")
-        total_patients = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM patients")
+            total_patients = cursor.fetchone()[0]
 
-        cursor.execute("SELECT COUNT(*) FROM blood_requests WHERE status = 'Pending'")
-        pending_requests = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM blood_requests WHERE status = 'Pending'")
+            pending_requests = cursor.fetchone()[0]
 
-        cursor.execute("SELECT SUM(units_available) FROM inventory")
-        total_blood_units = cursor.fetchone()[0] or 0 
+            cursor.execute("SELECT COALESCE(SUM(units_available), 0) FROM inventory") # Use COALESCE for sum
+            total_blood_units = cursor.fetchone()[0] 
 
     except Error as e:
         flash(f"Database error loading dashboard statistics: {e}", "danger")
@@ -161,29 +191,29 @@ def patients():
 
     try:
         conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        
-        # Select patient_id explicitly along with other columns
-        sql_query = """
-            SELECT p.patient_id, p.name, p.age, p.gender, p.phone, p.city, bg.group_name 
-            FROM patients p
-            JOIN blood_groups bg ON p.blood_group_id = bg.id
-        """
-        query_params = []
-        where_clauses = []
+        if conn:
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            
+            sql_query = """
+                SELECT p.patient_id, p.name, p.age, p.gender, p.phone, p.city, bg.group_name 
+                FROM patients p
+                JOIN blood_groups bg ON p.blood_group_id = bg.id
+            """
+            query_params = []
+            where_clauses = []
 
-        if search_query:
-            where_clauses.append("(p.name LIKE %s OR bg.group_name LIKE %s OR p.city LIKE %s)")
-            query_params.extend([f"%{search_query}%", f"%{search_query}%", f"%{search_query}%"])
-        
-        if where_clauses:
-            sql_query += " WHERE " + " AND ".join(where_clauses)
-        
-        sql_query += " ORDER BY p.name ASC"
+            if search_query:
+                where_clauses.append("(p.name ILIKE %s OR bg.group_name ILIKE %s OR p.city ILIKE %s)") # Use ILIKE for case-insensitive search in PostgreSQL
+                query_params.extend([f"%{search_query}%", f"%{search_query}%", f"%{search_query}%"])
+            
+            if where_clauses:
+                sql_query += " WHERE " + " AND ".join(where_clauses)
+            
+            sql_query += " ORDER BY p.name ASC"
 
-        cursor.execute(sql_query, tuple(query_params))
-        patients_data = cursor.fetchall()
-        
+            cursor.execute(sql_query, tuple(query_params))
+            patients_data = cursor.fetchall()
+            
     except Error as e:
         flash(f"Database error loading patients: {e}", "danger")
     finally:
@@ -216,12 +246,13 @@ def add_patient():
 
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO patients (name, blood_group_id, age, gender, phone, city) VALUES (%s, %s, %s, %s, %s, %s)",
-                           (name, blood_group_id, age, gender, phone, city))
-            conn.commit()
-            flash("Patient added successfully!", "success")
-            return redirect(url_for('patients'))
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO patients (name, blood_group_id, age, gender, phone, city) VALUES (%s, %s, %s, %s, %s, %s)",
+                               (name, blood_group_id, age, gender, phone, city))
+                conn.commit()
+                flash("Patient added successfully!", "success")
+                return redirect(url_for('patients'))
         except Error as e:
             flash(f"Database Error: {e}", "danger")
         finally:
@@ -246,33 +277,33 @@ def edit_patient(patient_id):
 
     try:
         conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        
-        if request.method == 'POST':
-            name = request.form['name']
-            blood_group_id = request.form['blood_group_id'] # Get ID
-            age = request.form['age']
-            gender = request.form['gender']
-            phone = request.form['phone']
-            city = request.form['city']
-            cursor.execute("UPDATE patients SET name=%s, blood_group_id=%s, age=%s, gender=%s, phone=%s, city=%s WHERE patient_id=%s",
-                           (name, blood_group_id, age, gender, phone, city, patient_id))
-            conn.commit()
-            flash("Patient updated successfully!", "success")
-            return redirect(url_for('patients'))
-        
-        # Select patient data and join to get group_name
-        cursor.execute("""
-            SELECT p.patient_id, p.name, p.age, p.gender, p.phone, p.city, p.blood_group_id, bg.group_name 
-            FROM patients p
-            JOIN blood_groups bg ON p.blood_group_id = bg.id
-            WHERE p.patient_id = %s
-        """, (patient_id,))
-        patient = cursor.fetchone()
-        
-        if not patient:
-            flash("Patient not found.", "danger")
-            return redirect(url_for('patients'))
+        if conn:
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            
+            if request.method == 'POST':
+                name = request.form['name']
+                blood_group_id = request.form['blood_group_id'] # Get ID
+                age = request.form['age']
+                gender = request.form['gender']
+                phone = request.form['phone']
+                city = request.form['city']
+                cursor.execute("UPDATE patients SET name=%s, blood_group_id=%s, age=%s, gender=%s, phone=%s, city=%s WHERE patient_id=%s",
+                               (name, blood_group_id, age, gender, phone, city, patient_id))
+                conn.commit()
+                flash("Patient updated successfully!", "success")
+                return redirect(url_for('patients'))
+            
+            cursor.execute("""
+                SELECT p.patient_id, p.name, p.age, p.gender, p.phone, p.city, p.blood_group_id, bg.group_name 
+                FROM patients p
+                JOIN blood_groups bg ON p.blood_group_id = bg.id
+                WHERE p.patient_id = %s
+            """, (patient_id,))
+            patient = cursor.fetchone()
+            
+            if not patient:
+                flash("Patient not found.", "danger")
+                return redirect(url_for('patients'))
 
     except Error as e:
         flash(f"Database error during patient edit: {e}", "danger")
@@ -298,10 +329,11 @@ def delete_patient(patient_id):
 
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM patients WHERE patient_id = %s", (patient_id,))
-        conn.commit()
-        flash("Patient deleted successfully.", "success")
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM patients WHERE patient_id = %s", (patient_id,))
+            conn.commit()
+            flash("Patient deleted successfully.", "success")
     except Error as e:
         flash(f"Database error: {e}", "danger")
     finally:
@@ -327,29 +359,29 @@ def donors():
 
     try:
         conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        
-        # Select donor_id explicitly along with other columns
-        sql_query = """
-            SELECT d.donor_id, d.name, d.age, d.gender, d.phone, d.email, d.last_donated_date, d.city, bg.group_name 
-            FROM donors d
-            JOIN blood_groups bg ON d.blood_group_id = bg.id
-        """
-        query_params = []
-        where_clauses = []
+        if conn:
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            
+            sql_query = """
+                SELECT d.donor_id, d.name, d.age, d.gender, d.phone, d.email, d.last_donated_date, d.city, bg.group_name 
+                FROM donors d
+                JOIN blood_groups bg ON d.blood_group_id = bg.id
+            """
+            query_params = []
+            where_clauses = []
 
-        if search_query:
-            where_clauses.append("(d.name LIKE %s OR bg.group_name LIKE %s OR d.city LIKE %s)")
-            query_params.extend([f"%{search_query}%", f"%{search_query}%", f"%{search_query}%"])
-        
-        if where_clauses:
-            sql_query += " WHERE " + " AND ".join(where_clauses)
-        
-        sql_query += " ORDER BY d.name ASC"
+            if search_query:
+                where_clauses.append("(d.name ILIKE %s OR bg.group_name ILIKE %s OR d.city ILIKE %s)")
+                query_params.extend([f"%{search_query}%", f"%{search_query}%", f"%{search_query}%"])
+            
+            if where_clauses:
+                sql_query += " WHERE " + " AND ".join(where_clauses)
+            
+            sql_query += " ORDER BY d.name ASC"
 
-        cursor.execute(sql_query, tuple(query_params))
-        donors_data = cursor.fetchall()
-        
+            cursor.execute(sql_query, tuple(query_params))
+            donors_data = cursor.fetchall()
+            
     except Error as e:
         flash(f"Database error loading donors: {e}", "danger")
     finally:
@@ -383,12 +415,13 @@ def add_donor():
         
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO donors (name, blood_group_id, age, gender, phone, email, last_donated_date, city) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                           (name, blood_group_id, age, gender, phone, email, last_donated_date, city))
-            conn.commit()
-            flash("Donor added successfully!", "success")
-            return redirect(url_for('donors'))
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO donors (name, blood_group_id, age, gender, phone, email, last_donated_date, city) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                               (name, blood_group_id, age, gender, phone, email, last_donated_date, city))
+                conn.commit()
+                flash("Donor added successfully!", "success")
+                return redirect(url_for('donors'))
         except Error as e:
             flash(f"Database Error: {e}", "danger")
         finally:
@@ -412,35 +445,35 @@ def edit_donor(donor_id_param):
 
     try:
         conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        
-        if request.method == 'POST':
-            name = request.form['name']
-            blood_group_id = request.form['blood_group_id'] # Get ID
-            age = request.form['age']
-            gender = request.form['gender']
-            phone = request.form['phone']
-            email = request.form.get('email')
-            last_donated_date = request.form.get('last_donated_date')
-            city = request.form['city']
-            cursor.execute("UPDATE donors SET name=%s, blood_group_id=%s, age=%s, gender=%s, phone=%s, email=%s, last_donated_date=%s, city=%s WHERE donor_id=%s",
-                           (name, blood_group_id, age, gender, phone, email, last_donated_date, city, donor_id_param))
-            conn.commit()
-            flash("Donor updated successfully!", "success")
-            return redirect(url_for('donors'))
-        
-        # Select donor data and join to get group_name
-        cursor.execute("""
-            SELECT d.donor_id, d.name, d.age, d.gender, d.phone, d.email, d.last_donated_date, d.city, d.blood_group_id, bg.group_name 
-            FROM donors d
-            JOIN blood_groups bg ON d.blood_group_id = bg.id
-            WHERE d.donor_id = %s
-        """, (donor_id_param,))
-        donor = cursor.fetchone()
-        
-        if not donor:
-            flash("Donor not found.", "danger")
-            return redirect(url_for('donors'))
+        if conn:
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            
+            if request.method == 'POST':
+                name = request.form['name']
+                blood_group_id = request.form['blood_group_id'] # Get ID
+                age = request.form['age']
+                gender = request.form['gender']
+                phone = request.form['phone']
+                email = request.form.get('email')
+                last_donated_date = request.form.get('last_donated_date')
+                city = request.form['city']
+                cursor.execute("UPDATE donors SET name=%s, blood_group_id=%s, age=%s, gender=%s, phone=%s, email=%s, last_donated_date=%s, city=%s WHERE donor_id=%s",
+                               (name, blood_group_id, age, gender, phone, email, last_donated_date, city, donor_id_param))
+                conn.commit()
+                flash("Donor updated successfully!", "success")
+                return redirect(url_for('donors'))
+            
+            cursor.execute("""
+                SELECT d.donor_id, d.name, d.age, d.gender, d.phone, d.email, d.last_donated_date, d.city, d.blood_group_id, bg.group_name 
+                FROM donors d
+                JOIN blood_groups bg ON d.blood_group_id = bg.id
+                WHERE d.donor_id = %s
+            """, (donor_id_param,))
+            donor = cursor.fetchone()
+            
+            if not donor:
+                flash("Donor not found.", "danger")
+                return redirect(url_for('donors'))
 
     except Error as e:
         flash(f"Database error during donor edit: {e}", "danger")
@@ -465,10 +498,11 @@ def delete_donor(donor_id_param):
 
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM donors WHERE donor_id = %s", (donor_id_param,))
-        conn.commit()
-        flash("Donor deleted successfully.", "success")
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM donors WHERE donor_id = %s", (donor_id_param,))
+            conn.commit()
+            flash("Donor deleted successfully.", "success")
     except Error as e:
         flash(f"Database error: {e}", "danger")
     finally:
@@ -494,27 +528,28 @@ def blood_requests():
 
     try:
         conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        
-        sql_query = """
-            SELECT br.*, bg.group_name 
-            FROM blood_requests br
-            JOIN blood_groups bg ON br.blood_group_id = bg.id
-        """
-        query_params = []
-        where_clauses = []
+        if conn:
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            
+            sql_query = """
+                SELECT br.*, bg.group_name 
+                FROM blood_requests br
+                JOIN blood_groups bg ON br.blood_group_id = bg.id
+            """
+            query_params = []
+            where_clauses = []
 
-        if search_query:
-            where_clauses.append("(br.patient_name LIKE %s OR bg.group_name LIKE %s OR br.status LIKE %s OR br.requested_by LIKE %s)")
-            query_params.extend([f"%{search_query}%", f"%{search_query}%", f"%{search_query}%", f"%{search_query}%"])
-        
-        if where_clauses:
-            sql_query += " WHERE " + " AND ".join(where_clauses)
-        
-        sql_query += " ORDER BY br.status ASC, br.request_date DESC"
+            if search_query:
+                where_clauses.append("(br.patient_name ILIKE %s OR bg.group_name ILIKE %s OR br.status ILIKE %s OR br.requested_by ILIKE %s)")
+                query_params.extend([f"%{search_query}%", f"%{search_query}%", f"%{search_query}%", f"%{search_query}%"])
+            
+            if where_clauses:
+                sql_query += " WHERE " + " AND ".join(where_clauses)
+            
+            sql_query += " ORDER BY br.status ASC, br.request_date DESC"
 
-        cursor.execute(sql_query, tuple(query_params))
-        requests_data = cursor.fetchall()
+            cursor.execute(sql_query, tuple(query_params))
+            requests_data = cursor.fetchall()
     except Error as e:
         flash(f"Database error loading blood requests: {e}", "danger")
     finally:
@@ -548,72 +583,73 @@ def edit_blood_request(request_id_param):
 
     try:
         conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True) 
-        
-        # Fetch current request details before update to check old status and get group_name
-        cursor.execute("""
-            SELECT br.*, bg.group_name 
-            FROM blood_requests br
-            JOIN blood_groups bg ON br.blood_group_id = bg.id
-            WHERE br.request_id = %s
-        """, (request_id_param,))
-        original_request = cursor.fetchone()
-
-        if not original_request:
-            flash("Blood request not found.", "danger")
-            return redirect(url_for('blood_requests'))
-
-        if request.method == 'POST':
-            patient_name = request.form['patient_name']
-            blood_group_id = request.form['blood_group_id'] # Get ID
-            quantity_units = int(request.form['quantity_units'])
-            request_date = request.form['request_date']
-            new_status = request.form['status']
-            reason = request.form.get('reason')
-            requested_by = request.form.get('requested_by')
+        if conn:
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor) 
             
-            # Use original_request's group_name for inventory check, or re-fetch from ID if group_id changed
-            current_blood_group_name = original_request['group_name']
+            # Fetch current request details before update to check old status and get group_name
+            cursor.execute("""
+                SELECT br.*, bg.group_name 
+                FROM blood_requests br
+                JOIN blood_groups bg ON br.blood_group_id = bg.id
+                WHERE br.request_id = %s
+            """, (request_id_param,))
+            original_request = cursor.fetchone()
+
+            if not original_request:
+                flash("Blood request not found.", "danger")
+                return redirect(url_for('blood_requests'))
+
+            if request.method == 'POST':
+                patient_name = request.form['patient_name']
+                blood_group_id = request.form['blood_group_id'] # Get ID
+                quantity_units = int(request.form['quantity_units'])
+                request_date = request.form['request_date']
+                new_status = request.form['status']
+                reason = request.form.get('reason')
+                requested_by = request.form.get('requested_by')
+                
+                # Use original_request's group_name for inventory check, or re-fetch from ID if group_id changed
+                current_blood_group_name = original_request['group_name']
+                
+                # If blood group was changed during edit, need to re-fetch its name for inventory logic
+                if str(blood_group_id) != str(original_request['blood_group_id']):
+                    temp_cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+                    temp_cursor.execute("SELECT group_name FROM blood_groups WHERE id = %s", (blood_group_id,))
+                    new_group_name_result = temp_cursor.fetchone()
+                    if new_group_name_result:
+                        current_blood_group_name = new_group_name_result['group_name']
+                    temp_cursor.close()
+
+
+                if new_status == 'Fulfilled' and original_request['status'] != 'Fulfilled':
+                    cursor.execute("SELECT units_available FROM inventory WHERE blood_group_id = %s", (blood_group_id,))
+                    inventory_result = cursor.fetchone()
+
+                    if inventory_result and inventory_result['units_available'] >= quantity_units:
+                        new_inventory_units = inventory_result['units_available'] - quantity_units
+                        cursor.execute("UPDATE inventory SET units_available = %s WHERE blood_group_id = %s", (new_inventory_units, blood_group_id))
+                        conn.commit()
+                        flash(f"Blood request fulfilled! {quantity_units} units of {current_blood_group_name} deducted from inventory.", "success")
+                    else:
+                        available_units = inventory_result['units_available'] if inventory_result else 0
+                        flash(f"Insufficient units of {current_blood_group_name} in inventory to fulfill request ({quantity_units} requested, {available_units} available).", "danger")
+                        new_status = original_request['status'] # Keep original status if not fulfilled
+                        conn.rollback()
+                        return redirect(url_for('blood_requests'))
+                elif new_status != 'Fulfilled' and original_request['status'] == 'Fulfilled':
+                     flash("Changing a fulfilled request's status will not automatically return units to inventory (feature not implemented).", "warning")
+
+                cursor.execute("UPDATE blood_requests SET patient_name=%s, blood_group_id=%s, quantity_units=%s, request_date=%s, status=%s, reason=%s, requested_by=%s WHERE request_id=%s",
+                               (patient_name, blood_group_id, quantity_units, request_date, new_status, reason, requested_by, request_id_param))
+                conn.commit()
+                
+                # Only show success message if fulfillment logic didn't already
+                if not (new_status == 'Fulfilled' and original_request['status'] != 'Fulfilled'):
+                    flash("Blood request updated successfully!", "success")
+                return redirect(url_for('blood_requests'))
             
-            # If blood group was changed during edit, need to re-fetch its name for inventory logic
-            if str(blood_group_id) != str(original_request['blood_group_id']):
-                temp_cursor = conn.cursor(dictionary=True)
-                temp_cursor.execute("SELECT group_name FROM blood_groups WHERE id = %s", (blood_group_id,))
-                new_group_name_result = temp_cursor.fetchone()
-                if new_group_name_result:
-                    current_blood_group_name = new_group_name_result['group_name']
-                temp_cursor.close()
-
-
-            if new_status == 'Fulfilled' and original_request['status'] != 'Fulfilled':
-                cursor.execute("SELECT units_available FROM inventory WHERE blood_group_id = %s", (blood_group_id,))
-                inventory_result = cursor.fetchone()
-
-                if inventory_result and inventory_result['units_available'] >= quantity_units:
-                    new_inventory_units = inventory_result['units_available'] - quantity_units
-                    cursor.execute("UPDATE inventory SET units_available = %s WHERE blood_group_id = %s", (new_inventory_units, blood_group_id))
-                    conn.commit()
-                    flash(f"Blood request fulfilled! {quantity_units} units of {current_blood_group_name} deducted from inventory.", "success")
-                else:
-                    available_units = inventory_result['units_available'] if inventory_result else 0
-                    flash(f"Insufficient units of {current_blood_group_name} in inventory to fulfill request ({quantity_units} requested, {available_units} available).", "danger")
-                    new_status = original_request['status'] # Keep original status if not fulfilled
-                    conn.rollback()
-                    return redirect(url_for('blood_requests'))
-            elif new_status != 'Fulfilled' and original_request['status'] == 'Fulfilled':
-                 flash("Changing a fulfilled request's status will not automatically return units to inventory (feature not implemented).", "warning")
-
-            cursor.execute("UPDATE blood_requests SET patient_name=%s, blood_group_id=%s, quantity_units=%s, request_date=%s, status=%s, reason=%s, requested_by=%s WHERE request_id=%s",
-                           (patient_name, blood_group_id, quantity_units, request_date, new_status, reason, requested_by, request_id_param))
-            conn.commit()
+            blood_request = original_request # Pass the fetched original request to the template
             
-            # Only show success message if fulfillment logic didn't already
-            if not (new_status == 'Fulfilled' and original_request['status'] != 'Fulfilled'):
-                flash("Blood request updated successfully!", "success")
-            return redirect(url_for('blood_requests'))
-        
-        blood_request = original_request # Pass the fetched original request to the template
-        
     except ValueError:
         flash("Invalid quantity. Please enter a whole number for units.", "danger")
         return redirect(url_for('blood_requests'))
@@ -641,11 +677,12 @@ def delete_blood_request(request_id_param):
 
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("DELETE FROM blood_requests WHERE request_id = %s", (request_id_param,))
-        conn.commit()
-        flash("Blood request deleted successfully.", "success")
+        if conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("DELETE FROM blood_requests WHERE request_id = %s", (request_id_param,))
+            conn.commit()
+            flash("Blood request deleted successfully.", "success")
     except Error as e:
         flash(f"Database error: {e}", "danger")
     finally:
@@ -679,35 +716,36 @@ def inventory():
 
         try:
             conn = get_db_connection()
-            cursor = conn.cursor(dictionary=True)
-
-            cursor.execute("SELECT units_available FROM inventory WHERE blood_group_id = %s", (blood_group_id,))
-            current_units_result = cursor.fetchone()
-
-            if current_units_result:
-                current_units = current_units_result['units_available']
-                new_units = current_units # Initialize with current_units
-
-                if action == 'add':
-                    new_units = current_units + units_change
-                    flash(f"Added {units_change} units to {selected_group_name}.", "success")
-                elif action == 'subtract':
-                    if current_units >= units_change:
-                        new_units = current_units - units_change
-                        flash(f"Subtracted {units_change} units from {selected_group_name}.", "info")
-                    else:
-                        flash(f"Cannot subtract {units_change} units. Only {current_units} available for {selected_group_name}.", "danger")
-                        new_units = current_units # Keep current units if subtraction fails
+            if conn:
+                cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor) # Use DictCursor
                 
-                cursor.execute("UPDATE inventory SET units_available = %s, last_updated = CURRENT_TIMESTAMP() WHERE blood_group_id = %s", (new_units, blood_group_id))
-                conn.commit()
-            else:
-                if action == 'add':
-                    cursor.execute("INSERT INTO inventory (blood_group_id, units_available, last_updated) VALUES (%s, %s, CURRENT_TIMESTAMP())", (blood_group_id, units_change))
+                cursor.execute("SELECT units_available FROM inventory WHERE blood_group_id = %s", (blood_group_id,))
+                current_units_result = cursor.fetchone()
+
+                if current_units_result:
+                    current_units = current_units_result['units_available']
+                    new_units = current_units # Initialize with current_units
+
+                    if action == 'add':
+                        new_units = current_units + units_change
+                        flash(f"Added {units_change} units to {selected_group_name}.", "success")
+                    elif action == 'subtract':
+                        if current_units >= units_change:
+                            new_units = current_units - units_change
+                            flash(f"Subtracted {units_change} units from {selected_group_name}.", "info")
+                        else:
+                            flash(f"Cannot subtract {units_change} units. Only {current_units} available for {selected_group_name}.", "danger")
+                            new_units = current_units # Keep current units if subtraction fails
+                    
+                    cursor.execute("UPDATE inventory SET units_available = %s, last_updated = CURRENT_TIMESTAMP WHERE blood_group_id = %s", (new_units, blood_group_id))
                     conn.commit()
-                    flash(f"Added new blood group {selected_group_name} with {units_change} units.", "success")
                 else:
-                    flash(f"Blood group {selected_group_name} not found in inventory. Cannot subtract units.", "danger")
+                    if action == 'add':
+                        cursor.execute("INSERT INTO inventory (blood_group_id, units_available, last_updated) VALUES (%s, %s, CURRENT_TIMESTAMP)", (blood_group_id, units_change))
+                        conn.commit()
+                        flash(f"Added new blood group {selected_group_name} with {units_change} units.", "success")
+                    else:
+                        flash(f"Blood group {selected_group_name} not found in inventory. Cannot subtract units.", "danger")
 
         except ValueError:
             flash("Invalid quantity. Please enter a whole number.", "danger")
@@ -725,15 +763,16 @@ def inventory():
 
     try:
         conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        # Join to get group_name for display
-        cursor.execute("""
-            SELECT i.units_available, i.last_updated, bg.group_name, i.blood_group_id
-            FROM inventory i
-            JOIN blood_groups bg ON i.blood_group_id = bg.id
-            ORDER BY bg.group_name ASC
-        """)
-        inventory_data = cursor.fetchall()
+        if conn:
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor) # Use DictCursor
+            # Join to get group_name for display
+            cursor.execute("""
+                SELECT i.units_available, i.last_updated, bg.group_name, i.blood_group_id
+                FROM inventory i
+                JOIN blood_groups bg ON i.blood_group_id = bg.id
+                ORDER BY bg.group_name ASC
+            """)
+            inventory_data = cursor.fetchall()
     except Error as e:
         flash(f"Database error loading inventory: {e}", "danger")
     finally:
@@ -754,16 +793,17 @@ def check_availability():
 
     try:
         conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        # Join to get group_name for display
-        cursor.execute("""
-            SELECT i.units_available, bg.group_name 
-            FROM inventory i
-            JOIN blood_groups bg ON i.blood_group_id = bg.id
-            WHERE i.units_available > 0 
-            ORDER BY bg.group_name ASC
-        """)
-        inventory_data = cursor.fetchall()
+        if conn:
+            cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor) # Use DictCursor
+            # Join to get group_name for display
+            cursor.execute("""
+                SELECT i.units_available, bg.group_name 
+                FROM inventory i
+                JOIN blood_groups bg ON i.blood_group_id = bg.id
+                WHERE i.units_available > 0 
+                ORDER BY bg.group_name ASC
+            """)
+            inventory_data = cursor.fetchall()
     except Error as e:
         flash(f"Database error loading blood availability: {e}", "danger")
     finally:
@@ -795,12 +835,13 @@ def public_add_blood_request():
 
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO blood_requests (patient_name, blood_group_id, quantity_units, request_date, status, reason, requested_by) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                           (patient_name, blood_group_id, quantity_units, request_date, status, reason, requested_by))
-            conn.commit()
-            flash("Your blood request has been submitted successfully! We will review it shortly.", "success")
-            return redirect(url_for('check_availability'))
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO blood_requests (patient_name, blood_group_id, quantity_units, request_date, status, reason, requested_by) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                               (patient_name, blood_group_id, quantity_units, request_date, status, reason, requested_by))
+                conn.commit()
+                flash("Your blood request has been submitted successfully! We will review it shortly.", "success")
+                return redirect(url_for('check_availability'))
         except Error as e:
             flash(f"Error submitting request: {e}", "danger")
         finally:
@@ -813,4 +854,6 @@ def public_add_blood_request():
 
 
 if __name__ == '__main__':
+    # When running locally, Flask's default debug server is used.
+    # For production, Gunicorn (as configured in Render) will manage the app.
     app.run(debug=True)
